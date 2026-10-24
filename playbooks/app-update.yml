@@ -1,0 +1,46 @@
+---
+# Rolling update to a new image version, with automatic rollback if the new
+# tasks fail their health checks. On success the version is saved to the
+# definition file.
+#   make update ENV=dev APP=web VERSION=1.28-alpine
+- name: Update an application
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check the request
+      ansible.builtin.assert:
+        that:
+          - app_name | default('') | length > 0
+          - app_version | default('') | string | length > 0
+        fail_msg: "Usage: make update ENV=<env> APP=<app> VERSION=<image tag>"
+        quiet: true
+
+    - name: Load application definitions
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: catalog
+
+    - name: Ensure the overlay network
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: network
+
+    - name: Roll out {{ app_name }} {{ app_version }}
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: deploy
+      vars:
+        swarm_app_name: "{{ app_name }}"
+        swarm_app_action: update
+        swarm_app_overrides:
+          version: "{{ app_version | string }}"
+
+    - name: Save the new version to the definition
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: persist
+      vars:
+        swarm_app_name: "{{ app_name }}"
+        swarm_app_persist:
+          version: "{{ app_version | string }}"

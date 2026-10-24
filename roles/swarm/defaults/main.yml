@@ -1,0 +1,11 @@
+---
+# The first manager in the inventory bootstraps the cluster and is the one
+# every management playbook talks to.
+swarm_leader: "{{ groups['managers'] | first }}"
+
+# Encrypt the Raft log at rest (requires `docker swarm unlock` after a
+# manager restarts). Set per environment in group_vars.
+swarm_autolock: false
+
+# Extra node labels, set per host in the inventory. `env` is always added.
+node_labels: {}

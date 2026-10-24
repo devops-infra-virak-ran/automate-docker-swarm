@@ -1,0 +1,17 @@
+# Vault passwords never leave the operator's machine
+.vault/
+*.pass
+
+# Plain-text vault files: only the encrypted group_vars/all/vault.yml is committed
+vault.decrypted.yml
+
+# Collections installed by `make deps`
+collections/
+
+
+*.retry
+__pycache__/
+.venv/
+
+# Lab copy of the DEV app definitions (created by tests/lab/up.sh)
+tests/lab/inventory/apps/

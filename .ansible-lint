@@ -1,0 +1,19 @@
+---
+# Rules skipped on purpose (everything else is enforced):
+skip_list:
+  # Task names start with "<app> |" so output from loops over several apps
+  # stays readable; ansible-lint wants templates only at the end.
+  - name[template]
+  # app_catalog / app_env_files / swarm_app are shared by the role and the
+  # playbooks that drive it, so they are not role-private variables.
+  - var-naming[no-role-prefix]
+  # Conditional include_role on `is changed` — handlers cannot include roles
+  # with per-call vars, so these cannot be handlers.
+  - no-handler
+  # Docker --format Go templates ({{.Name}}) are tagged !unsafe and never go
+  # through Jinja; ansible-lint parses them anyway.
+  - jinja[invalid]
+
+exclude_paths:
+  - collections/
+  - tests/lab/inventory/apps/

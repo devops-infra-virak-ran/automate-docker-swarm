@@ -1,0 +1,43 @@
+---
+# Order matters: allow SSH before turning the firewall on.
+
+- name: Allow SSH from trusted ranges
+  community.general.ufw:
+    rule: allow
+    port: "{{ ssh_port | string }}"
+    proto: tcp
+    src: "{{ item }}"
+    comment: ssh
+  loop: "{{ ssh_allowed_cidrs }}"
+
+- name: Allow Swarm traffic from the other cluster nodes only
+  community.general.ufw:
+    rule: allow
+    port: "{{ item.1.port }}"
+    proto: "{{ item.1.proto }}"
+    src: "{{ hostvars[item.0].swarm_addr }}"
+    comment: "swarm {{ item.1.what }}"
+  loop: "{{ groups['swarm_nodes'] | difference([inventory_hostname]) | product(_swarm_ports) | list }}"
+  loop_control:
+    label: "{{ item.0 }} {{ item.1.port }}/{{ item.1.proto }}"
+  vars:
+    _swarm_ports:
+      - { port: "2377", proto: tcp, what: cluster management }
+      - { port: "7946", proto: tcp, what: node gossip }
+      - { port: "7946", proto: udp, what: node gossip }
+      - { port: "4789", proto: udp, what: overlay vxlan }
+
+- name: Allow IPsec (ESP) between nodes for encrypted overlay networks
+  community.general.ufw:
+    rule: allow
+    proto: esp
+    src: "{{ hostvars[item].swarm_addr }}"
+    comment: swarm encrypted overlay
+  loop: "{{ groups['swarm_nodes'] | difference([inventory_hostname]) }}"
+  when: overlay_encrypted | default(false) | bool
+
+- name: Deny all other inbound traffic and enable the firewall
+  community.general.ufw:
+    state: enabled
+    direction: incoming
+    policy: deny

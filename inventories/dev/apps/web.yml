@@ -1,0 +1,48 @@
+---
+# Application definition: `web` in DEV.
+# File name == Swarm service name. Keys left out fall back to
+# group_vars/all/main.yml (app_env_defaults), then roles/swarm_app/defaults.
+# `version`, `replicas` and `state` are rewritten by make update/scale/
+# rollback/remove — commit the change afterwards.
+state: present
+image: nginx
+version: "1.27-alpine"
+replicas: 2
+
+publish:
+  - published_port: 8080
+    target_port: 80
+
+# Environment variables live in web.env next to this file (make env-set/env-unset).
+# APP_ENV and APP_VERSION are injected automatically.
+
+# Docker configs, rendered from templates/apps/<template> with Jinja.
+configs:
+  - name: index
+    template: web/index.html.j2
+    target: /usr/share/nginx/html/index.html
+  - name: nginx
+    template: web/default.conf.template.j2
+    target: /etc/nginx/templates/default.conf.template
+
+# Docker secrets, values from the encrypted vault (vault_app_secrets).
+secrets:
+  - name: api_token
+    vault_key: web_api_token
+
+healthcheck:
+  test: ["CMD-SHELL", "[ \"$FORCE_UNHEALTHY\" != true ] && wget -qO- http://127.0.0.1/healthz >/dev/null || exit 1"]
+  interval: 5s
+  timeout: 3s
+  retries: 3
+  start_period: 5s
+
+resources:
+  limits:
+    cpus: 0.25
+    memory: 64M
+
+# Checked from the bootstrap manager after every rollout.
+smoke_check:
+  port: 8080
+  path: /healthz

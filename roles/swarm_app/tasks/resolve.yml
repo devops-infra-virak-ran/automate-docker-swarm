@@ -1,0 +1,41 @@
+---
+# Input:  swarm_app_name, app_catalog, app_env_files (catalog.yml)
+#         swarm_app_overrides — set by the calling playbook (e.g. new version)
+#         app_overrides       — free-form extra-vars from the operator
+# Output: swarm_app — the fully merged definition.
+
+- name: "{{ swarm_app_name }} | check the application is defined"
+  ansible.builtin.assert:
+    that: swarm_app_name in app_catalog
+    fail_msg: >-
+      No definition for '{{ swarm_app_name }}' in {{ swarm_app_definitions_dir }}.
+      Defined: {{ app_catalog.keys() | sort | join(', ') or 'none' }}.
+    quiet: true
+
+- name: "{{ swarm_app_name }} | merge defaults, environment defaults and definition"
+  ansible.builtin.set_fact:
+    swarm_app: >-
+      {{ swarm_app_defaults
+         | combine(app_env_defaults | default({}),
+                   app_catalog[swarm_app_name] | default({}, true),
+                   {'env': app_env_files[swarm_app_name] | default({})},
+                   swarm_app_overrides | default({}),
+                   app_overrides | default({}),
+                   recursive=True) }}
+
+- name: "{{ swarm_app_name }} | validate the definition"
+  ansible.builtin.assert:
+    that:
+      - swarm_app_name is match('^[a-z0-9][a-z0-9_-]{0,62}$')
+      - swarm_app.state in ['present', 'absent']
+      - swarm_app.image is string and swarm_app.image | length > 0
+      - swarm_app.version is string and swarm_app.version | length > 0
+      - swarm_app.replicas | string is match('^[0-9]+$')
+      - swarm_app.update_config.order in ['start-first', 'stop-first']
+      - swarm_app.secrets | map(attribute='vault_key') | difference((vault_app_secrets | default({})).keys()) | length == 0
+    fail_msg: >-
+      Invalid definition for '{{ swarm_app_name }}'. Check: name is lowercase [a-z0-9_-];
+      state is present|absent; image is set; version is a QUOTED string (1.10 unquoted becomes 1.1);
+      replicas is a whole number; every secrets[].vault_key exists in the {{ env_name }} vault
+      (missing: {{ swarm_app.secrets | map(attribute='vault_key') | difference((vault_app_secrets | default({})).keys()) | join(', ') or 'none' }}).
+    quiet: true

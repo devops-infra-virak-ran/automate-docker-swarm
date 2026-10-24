@@ -1,0 +1,29 @@
+---
+# Append one line to the application's deploy log on the bootstrap manager.
+- name: "{{ swarm_app_name }} | ensure the history directory exists"
+  ansible.builtin.file:
+    path: "{{ swarm_app_history_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: "{{ swarm_app_name }} | append to the history log"
+  ansible.builtin.lineinfile:
+    path: "{{ swarm_app_history_dir }}/{{ swarm_app_name }}.log"
+    create: true
+    owner: root
+    group: root
+    mode: "0640"
+    insertafter: EOF
+    line: "{{ _fields | select | join(' ') }}"
+  vars:
+    _action: "{{ swarm_app_action | default('deploy') }}"
+    _fields:
+      - "{{ now(utc=true).strftime('%Y-%m-%dT%H:%M:%SZ') }}"
+      - "env={{ env_name }}"
+      - "action={{ _action }}"
+      - "{{ ('image=' ~ swarm_app.image ~ ':' ~ swarm_app.version) if _action != 'remove' else '' }}"
+      - "{{ ('replicas=' ~ swarm_app.replicas) if _action != 'remove' else '' }}"
+      - "{{ swarm_app_history_note | default('') }}"
+      - "by={{ swarm_app_operator }}"

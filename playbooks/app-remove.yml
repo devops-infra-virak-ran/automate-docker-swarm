@@ -1,0 +1,40 @@
+---
+# Remove an application (service + its configs and secrets) and mark the
+# definition `state: absent`, so a later `make deploy` keeps it removed.
+#   make remove ENV=dev APP=web           (PROD also needs CONFIRM=yes)
+- name: Remove an application
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check confirmation for PROD
+      ansible.builtin.import_tasks: tasks/prod-guard.yml
+
+    - name: Check the request
+      ansible.builtin.assert:
+        that: app_name | default('') | length > 0
+        fail_msg: "Usage: make remove ENV=<env> APP=<app>"
+        quiet: true
+
+    - name: Load application definitions
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: catalog
+
+    - name: Remove {{ app_name }}
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: deploy
+      vars:
+        swarm_app_name: "{{ app_name }}"
+        swarm_app_overrides:
+          state: absent
+
+    - name: Mark the definition absent
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: persist
+      vars:
+        swarm_app_name: "{{ app_name }}"
+        swarm_app_persist:
+          state: absent

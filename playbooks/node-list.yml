@@ -1,0 +1,15 @@
+---
+- name: List swarm nodes
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read nodes
+      community.docker.docker_swarm_info:
+        nodes: true
+        verbose_output: true
+      register: swarm_nodes_info
+
+    - name: Nodes in the {{ env_name | upper }} swarm
+      ansible.builtin.debug:
+        msg: "{{ swarm_nodes_info.nodes | node_table | join('\n') }}"

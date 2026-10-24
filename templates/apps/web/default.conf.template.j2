@@ -1,0 +1,26 @@
+# Managed by Ansible ({{ env_name }}/{{ swarm_app_name }}) — do not edit on the host.
+# Two-stage template: Ansible renders the {{ '{{ }}' }} parts at deploy time, then
+# the nginx entrypoint fills ${VARS} from the service environment at start-up.
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # Which replica answered, and with what configuration — handy to show
+    # load balancing and rolling updates during the demo.
+    location = /info {
+        default_type application/json;
+        return 200 '{"env":"${APP_ENV}","version":"${APP_VERSION}","greeting":"${GREETING}","log_level":"${LOG_LEVEL}","replica":"$hostname"}\n';
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}

@@ -1,0 +1,37 @@
+---
+# Wait until the routing-mesh DNAT rule for every port in
+# swarm_app_ingress_ports is absent/present on every node
+# (swarm_app_ingress_expect).
+#
+# Why: two services publishing the same port program the *same* rule. If the
+# new owner adds it before the old service's asynchronous cleanup runs, the
+# cleanup deletes it and the port goes dead cluster-wide while
+# `docker service ls` still shows it published. So a port is only handed over
+# once every node has dropped the old rule.
+#
+# Docker may program the rules with iptables (shown by iptables-save) or
+# natively in nftables (Docker 29 on Ubuntu 24.04, where `iptables -S` fails
+# with "Incompatible with this kernel"), so both are read. The DNAT rule looks
+# like `--dport 8080 -j DNAT` or `tcp dport 8080 ... dnat to`, always towards
+# docker_gwbridge (so a plain `docker run -p` container is not mistaken for it).
+- name: "Routing mesh | ports {{ swarm_app_ingress_ports | join(',') }} must be {{ swarm_app_ingress_expect }} on every node"
+  ansible.builtin.shell: |
+    set -o pipefail
+    { nft list ruleset 2>/dev/null; iptables-save -t nat 2>/dev/null; } | grep docker_gwbridge | grep -E 'dport [0-9]+ .*(DNAT|dnat to)' || true
+  args:
+    executable: /bin/bash
+  vars:
+    _found: >-
+      {{ swarm_app_ingress_ports | map('string')
+         | select('in', swarm_app_ingress_rules.stdout | default('') | regex_findall('dport ([0-9]+) ')) | list | length }}
+    _ok: >-
+      {{ (_found | int == swarm_app_ingress_ports | length) if swarm_app_ingress_expect == 'present'
+         else (_found | int == 0) }}
+  register: swarm_app_ingress_rules
+  until: _ok | bool
+  failed_when: not _ok | bool
+  retries: 20
+  delay: 1
+  changed_when: false
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['swarm_nodes'] }}"

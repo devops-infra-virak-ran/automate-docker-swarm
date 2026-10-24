@@ -1,0 +1,230 @@
+---
+# Swarm cannot rename a service, so rename is a controlled re-creation:
+#
+#   1. start <new> from <old>'s definition, without published ports (<old>
+#      still holds them), and wait until it is healthy
+#   2. remove <old>, wait until every node has released its ports, publish
+#      them on <new> — the port is unserved until <new>'s first task passes
+#      its health check on the routing mesh (typically 5-15 s); then delete
+#      <old>'s configs and secrets. Apps without published ports: no gap.
+#   3. converge <new> to the full definition (normally a no-op)
+#   4. rename the definition files <old>.yml/.env and the history log
+#
+# Re-running after a failure resumes where it stopped.
+#   make rename ENV=dev APP=web NEW_NAME=frontend    (PROD also needs CONFIRM=yes)
+#
+# Other services that reach <old> by DNS name must be updated to <new>.
+- name: Rename an application
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check confirmation for PROD
+      ansible.builtin.import_tasks: tasks/prod-guard.yml
+
+    - name: Check the request
+      ansible.builtin.assert:
+        that:
+          - app_name | default('') | length > 0
+          - app_new_name | default('') | length > 0
+          - app_new_name is match('^[a-z0-9][a-z0-9_-]{0,62}$')
+          - app_new_name != app_name
+        fail_msg: "Usage: make rename ENV=<env> APP=<old> NEW_NAME=<new>  (new name: lowercase a-z 0-9 _ -)"
+        quiet: true
+
+    - name: Load application definitions
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: catalog
+
+    - name: Already renamed — nothing to do
+      ansible.builtin.meta: end_play
+      when: app_name not in app_catalog and app_new_name in app_catalog
+
+    - name: Check the definitions
+      ansible.builtin.assert:
+        that:
+          - app_name in app_catalog
+          - app_new_name not in app_catalog
+        fail_msg: "Need a definition for '{{ app_name }}' and none for '{{ app_new_name }}' in {{ inventory_dir }}/apps."
+        quiet: true
+
+    - name: Read the old and new services
+      community.docker.docker_swarm_service_info:
+        name: "{{ item }}"
+      loop:
+        - "{{ app_name }}"
+        - "{{ app_new_name }}"
+      register: rename_services
+
+    - name: Note what is running
+      ansible.builtin.set_fact:
+        rename_old_running: "{{ rename_services.results[0].exists }}"
+        rename_new_running: "{{ rename_services.results[1].exists }}"
+
+    - name: Use the old definition under the new name
+      ansible.builtin.set_fact:
+        app_catalog: "{{ app_catalog | combine({app_new_name: app_catalog[app_name]}) }}"
+        app_env_files: "{{ app_env_files | combine({app_new_name: app_env_files[app_name] | default({})}) }}"
+        rename_publish: "{{ app_catalog[app_name].publish | default([]) }}"
+
+    - name: Re-create the running service under the new name
+      when: rename_old_running
+      block:
+        # Without published ports: <old> still holds them. (Starting <new> on
+        # temporary ports and switching later does not work — Swarm does not
+        # re-program the routing mesh when an attached service changes ports.)
+        - name: "Step 1/3: start {{ app_new_name }} alongside {{ app_name }}"
+          ansible.builtin.include_role:
+            name: swarm_app
+            tasks_from: deploy
+          vars:
+            swarm_app_name: "{{ app_new_name }}"
+            swarm_app_action: rename
+            swarm_app_history_note: "from={{ app_name }}"
+            swarm_app_overrides:
+              publish: []
+              smoke_check:
+
+        - name: "Step 2/3: hand the published ports from {{ app_name }} to {{ app_new_name }}"
+          when: rename_publish | length > 0
+          block:
+            - name: Remove {{ app_name }}
+              ansible.builtin.command:
+                argv: [docker, service, rm, "{{ app_name }}"]
+              changed_when: true
+
+            # Re-adding a port before every node has dropped the old rule
+            # loses it cluster-wide (see roles/swarm_app/tasks/ingress.yml).
+            - name: Wait until every node has released the ports
+              ansible.builtin.include_role:
+                name: swarm_app
+                tasks_from: ingress
+              vars:
+                swarm_app_ingress_ports: "{{ rename_publish | map(attribute='published_port') | list }}"
+                swarm_app_ingress_expect: absent
+
+            - name: Publish the real ports on {{ app_new_name }}
+              ansible.builtin.command:
+                argv: >-
+                  {{ ['docker', 'service', 'update', '--detach']
+                     + (rename_publish | map('swarm_publish_arg') | list)
+                     + [app_new_name] }}
+              changed_when: true
+
+            - name: Wait for {{ app_new_name }} to settle
+              ansible.builtin.include_role:
+                name: swarm_app
+                tasks_from: wait
+              vars:
+                swarm_app_name: "{{ app_new_name }}"
+                swarm_app_update_started: true
+
+            - name: Verify every node routes the ports (self-heal once if not)
+              block:
+                - name: Check the routing mesh
+                  ansible.builtin.include_role:
+                    name: swarm_app
+                    tasks_from: ingress
+                  vars:
+                    swarm_app_ingress_ports: "{{ rename_publish | map(attribute='published_port') | list }}"
+                    swarm_app_ingress_expect: present
+              rescue:
+                # Mesh rules are (re)programmed when tasks attach to the ingress
+                # network; a start-first forced update re-attaches every task.
+                - name: Re-attach {{ app_new_name }}'s tasks to the routing mesh
+                  ansible.builtin.command:
+                    argv: [docker, service, update, --detach, --force, "{{ app_new_name }}"]
+                  changed_when: true
+
+                - name: Wait for {{ app_new_name }} to settle again
+                  ansible.builtin.include_role:
+                    name: swarm_app
+                    tasks_from: wait
+                  vars:
+                    swarm_app_name: "{{ app_new_name }}"
+                    swarm_app_update_started: true
+
+                - name: Check the routing mesh again
+                  ansible.builtin.include_role:
+                    name: swarm_app
+                    tasks_from: ingress
+                  vars:
+                    swarm_app_ingress_ports: "{{ rename_publish | map(attribute='published_port') | list }}"
+                    swarm_app_ingress_expect: present
+
+        - name: "Step 2/3: clean up {{ app_name }} (service, configs, secrets)"
+          ansible.builtin.include_role:
+            name: swarm_app
+            tasks_from: remove
+          vars:
+            swarm_app_name: "{{ app_name }}"
+
+    # Converge <new> to the full definition. A no-op after a clean run; it
+    # also finishes a rename that was interrupted after step 1 or 2.
+    - name: "Step 3/3: converge {{ app_new_name }} to its definition"
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: deploy
+      vars:
+        swarm_app_name: "{{ app_new_name }}"
+        swarm_app_action: rename
+        swarm_app_history_note: "from={{ app_name }}"
+      when: rename_old_running or rename_new_running
+
+    - name: Keep the deploy history under the new name
+      ansible.builtin.shell: |
+        set -eu
+        cd {{ swarm_app_history_dir | quote }}
+        if [ -f {{ (app_name ~ '.log') | quote }} ]; then
+          cat {{ (app_name ~ '.log') | quote }} {{ (app_new_name ~ '.log') | quote }} 2>/dev/null > .rename.tmp || true
+          mv .rename.tmp {{ (app_new_name ~ '.log') | quote }}
+          rm -f {{ (app_name ~ '.log') | quote }}
+          echo moved
+        fi
+      vars:
+        swarm_app_history_dir: /var/lib/swarm-automation/history
+      register: rename_history
+      changed_when: "'moved' in rename_history.stdout"
+
+    - name: Rename the definition files
+      delegate_to: localhost
+      become: false
+      vars:
+        _dir: "{{ inventory_dir }}/apps"
+      block:
+        - name: Check which definition files exist
+          ansible.builtin.stat:
+            path: "{{ _dir }}/{{ app_name }}.{{ item }}"
+          loop: [yml, env]
+          register: rename_files
+
+        - name: Copy {{ app_name }}.* to {{ app_new_name }}.*
+          ansible.builtin.copy:
+            src: "{{ item.stat.path }}"
+            dest: "{{ _dir }}/{{ app_new_name }}.{{ item.item }}"
+            mode: preserve
+          loop: "{{ rename_files.results | selectattr('stat.exists') | list }}"
+          loop_control:
+            label: "{{ app_new_name }}.{{ item.item }}"
+
+        - name: Update the header comment
+          ansible.builtin.replace:
+            path: "{{ _dir }}/{{ app_new_name }}.{{ item }}"
+            regexp: '`{{ app_name }}`'
+            replace: '`{{ app_new_name }}`'
+          loop: "{{ rename_files.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+
+        - name: Delete {{ app_name }}.*
+          ansible.builtin.file:
+            path: "{{ item.stat.path }}"
+            state: absent
+          loop: "{{ rename_files.results | selectattr('stat.exists') | list }}"
+          loop_control:
+            label: "{{ app_name }}.{{ item.item }}"
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: >-
+          Renamed {{ app_name }} -> {{ app_new_name }} in {{ env_name | upper }}.
+          Commit inventories/{{ env_name }}/apps/. Services that called '{{ app_name }}' by DNS must now use '{{ app_new_name }}'.

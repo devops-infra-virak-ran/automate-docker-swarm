@@ -1,0 +1,38 @@
+---
+env_name: prod
+
+# --- Access -----------------------------------------------------------------
+ansible_user: ubuntu
+ansible_ssh_private_key_file: ~/.ssh/swarm-prod
+
+swarm_operators: []
+
+# --- Host hardening ---------------------------------------------------------
+firewall_enabled: true
+# Narrow this to your bastion / office range before going live, e.g. 203.0.113.10/32.
+ssh_allowed_cidrs:
+  - 0.0.0.0/0
+
+# --- Swarm ------------------------------------------------------------------
+# Autolock encrypts the Raft log at rest; a restarted manager then needs
+# `docker swarm unlock` with the key printed by `docker swarm unlock-key`.
+# Leave off until you have somewhere safe to keep that key.
+swarm_autolock: false
+apps_network: apps_net
+# IPsec between nodes for application traffic on the overlay network.
+overlay_encrypted: true
+
+# --- Application defaults for this environment ------------------------------
+# PROD is conservative: slower rollouts, a longer watch window, apps only on
+# workers, spread across zones.
+app_env_defaults:
+  update_config:
+    parallelism: 1
+    delay: 15s
+    monitor: 45s
+  placement:
+    constraints:
+      - node.role == worker
+      - node.labels.tier == app
+    preferences:
+      - spread: node.labels.zone

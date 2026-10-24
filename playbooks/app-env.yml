@@ -1,0 +1,112 @@
+---
+# Manage an application's plain environment variables (inventories/<env>/apps/<app>.env)
+# and roll the change out.
+#   make env-list  ENV=dev APP=web
+#   make env-set   ENV=dev APP=web KEY=LOG_LEVEL VALUE=info
+#   make env-unset ENV=dev APP=web KEY=LOG_LEVEL
+# Names that look like credentials are refused: put those in the vault.
+- name: Manage environment variables
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  vars:
+    _env_file: "{{ inventory_dir }}/apps/{{ app_name }}.env"
+  tasks:
+    - name: Check the request
+      ansible.builtin.assert:
+        that:
+          - app_name | default('') | length > 0
+          - env_action in ['list', 'set', 'unset']
+          - env_action == 'list' or env_key | default('') is match('^[A-Za-z_][A-Za-z0-9_]*$')
+          - env_action != 'set' or env_value is defined
+        fail_msg: "Usage: make env-set ENV=<env> APP=<app> KEY=<NAME> VALUE=<value> | env-unset ... KEY=<NAME> | env-list ..."
+        quiet: true
+
+    - name: Load application definitions
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: catalog
+
+    - name: Check the application exists
+      ansible.builtin.assert:
+        that: app_name in app_catalog
+        fail_msg: "No definition for '{{ app_name }}' in {{ inventory_dir }}/apps."
+        quiet: true
+
+    - name: Refuse credentials in plain environment variables
+      ansible.builtin.assert:
+        that: env_key is not search(swarm_app_sensitive_env_pattern) or (force | default('no')) == 'yes'
+        fail_msg: >-
+          '{{ env_key }}' looks like a credential. Add it to the {{ env_name }} vault (make vault-edit ENV={{ env_name }})
+          and reference it under `secrets:` in {{ app_name }}.yml instead. (Override with FORCE=yes if it is not secret.)
+        quiet: true
+      vars:
+        swarm_app_sensitive_env_pattern: '(?i)(pass(word)?|secret|token|api_?key|private)'
+      when: env_action == 'set'
+
+    - name: Remember the current {{ app_name }}.env
+      ansible.builtin.set_fact:
+        env_existed: "{{ _env_file is file }}"
+        env_before: "{{ lookup('ansible.builtin.file', _env_file, errors='ignore') | default('', true) }}"
+
+    - name: Change and roll out (restore the file if the rollout fails)
+      block:
+        - name: Update {{ app_name }}.env
+          ansible.builtin.lineinfile:
+            path: "{{ _env_file }}"
+            regexp: "^{{ env_key }}="
+            line: "{{ env_key }}={{ env_value | default('') }}"
+            state: "{{ 'present' if env_action == 'set' else 'absent' }}"
+            create: true
+            mode: "0644"
+          delegate_to: localhost
+          become: false
+          register: env_changed
+          when: env_action in ['set', 'unset']
+
+        - name: Reload application definitions
+          ansible.builtin.include_role:
+            name: swarm_app
+            tasks_from: catalog
+          when: env_changed is changed
+
+        - name: Roll out the change
+          ansible.builtin.include_role:
+            name: swarm_app
+            tasks_from: deploy
+          vars:
+            swarm_app_name: "{{ app_name }}"
+            swarm_app_action: "env-{{ env_action }}"
+            swarm_app_history_note: "{{ env_key }}"
+          when: env_changed is changed
+
+      rescue:
+        - name: Restore {{ app_name }}.env
+          ansible.builtin.copy:
+            dest: "{{ _env_file }}"
+            content: "{{ env_before ~ '\n' }}"
+            mode: "0644"
+          delegate_to: localhost
+          become: false
+          when: env_existed
+
+        - name: Delete the {{ app_name }}.env this run created
+          ansible.builtin.file:
+            path: "{{ _env_file }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+          when: not env_existed
+
+        - name: Report the failure
+          ansible.builtin.fail:
+            msg: >-
+              Rolling out {{ env_key }} on {{ app_name }} failed, so {{ app_name }}.env was restored.
+              Cause: {{ ansible_failed_result.msg | default('see above') }}
+
+    - name: Environment of {{ app_name }} in {{ env_name | upper }}
+      ansible.builtin.debug:
+        msg: >-
+          {{ (app_env_files[app_name] | default({}))
+             | combine({'APP_ENV': env_name, 'APP_VERSION': app_catalog[app_name].version | default('?')}) }}
+      when: env_action == 'list' or env_changed is changed

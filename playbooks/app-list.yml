@@ -1,0 +1,29 @@
+---
+# What is defined vs. what is running, with drift detection.
+#   make list ENV=dev
+- name: List applications
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Load application definitions
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: catalog
+
+    - name: Read services managed in this environment
+      ansible.builtin.command:
+        argv:
+          - docker
+          - service
+          - ls
+          - --filter
+          - "label=io.swarm-automation.env={{ env_name }}"
+          - --format
+          - !unsafe "{{.Name}}\t{{.Replicas}}\t{{.Image}}\t{{.Ports}}"
+      register: list_services
+      changed_when: false
+
+    - name: Applications in {{ env_name | upper }}
+      ansible.builtin.debug:
+        msg: "{{ app_catalog | app_table(list_services.stdout_lines) | join('\n') }}"

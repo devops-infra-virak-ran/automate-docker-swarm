@@ -1,0 +1,16 @@
+---
+# Prepare existing VMs: base packages, SSH hardening, operator accounts,
+# firewall, Docker Engine. Safe to re-run.
+#
+# On a cluster that already runs workloads, use serial=1 (SERIAL=1 in the
+# Makefile) so a Docker restart never hits every node at once.
+- name: Prepare nodes
+  hosts: swarm_nodes
+  become: true
+  gather_facts: true
+  serial: "{{ serial | default('100%') }}"
+  roles:
+    - role: common
+      tags: [prepare, common]
+    - role: docker
+      tags: [prepare, docker]

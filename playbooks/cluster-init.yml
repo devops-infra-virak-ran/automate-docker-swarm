@@ -1,0 +1,14 @@
+---
+# Initialise the swarm on the first manager, join every other node in the
+# inventory with the right role, and apply node labels. Idempotent: running
+# it on a healthy cluster changes nothing.
+- name: Initialise and join the swarm
+  hosts: swarm_nodes
+  become: true
+  gather_facts: false
+  roles:
+    - role: swarm
+      tags: [swarm]
+
+- name: Show the result
+  ansible.builtin.import_playbook: node-list.yml

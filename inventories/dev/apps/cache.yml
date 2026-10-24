@@ -1,0 +1,34 @@
+---
+# Application definition: `cache` in DEV — Redis, reachable only on the
+# overlay network as `cache:6379` (no published port).
+state: present
+image: redis
+version: "7.4-alpine"
+replicas: 1
+
+# Read the password from the mounted secret so it never appears in
+# `docker service inspect` or the process environment.
+command: ["sh", "-c"]
+args:
+  - exec redis-server --requirepass "$(cat /run/secrets/redis_password)" --save "" --appendonly no
+
+secrets:
+  - name: redis_password
+    vault_key: cache_redis_password
+
+healthcheck:
+  test: ["CMD-SHELL", "redis-cli -a \"$(cat /run/secrets/redis_password)\" --no-auth-warning ping | grep -q PONG"]
+  interval: 5s
+  timeout: 3s
+  retries: 3
+  start_period: 5s
+
+resources:
+  limits:
+    cpus: 0.25
+    memory: 128M
+
+update_config:
+  # One Redis at a time and stop the old one first: two replicas of a
+  # non-clustered cache must never run side by side.
+  order: stop-first

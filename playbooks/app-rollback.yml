@@ -1,0 +1,111 @@
+---
+# Two ways back:
+#   make rollback ENV=dev APP=web                    # Swarm-native: return to the
+#                                                    # previous service spec at once
+#   make rollback ENV=dev APP=web VERSION=1.27-alpine  # redeploy a known-good version
+# Either way the resulting version/replicas are saved to the definition file.
+#
+# Native rollback restores the *whole* previous spec (env, configs, replicas
+# too). Swarm keeps only one previous spec and clears it after an automatic
+# rollback, so use the VERSION form then.
+- name: Roll back an application
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check confirmation for PROD
+      ansible.builtin.import_tasks: tasks/prod-guard.yml
+
+    - name: Check the request
+      ansible.builtin.assert:
+        that: app_name | default('') | length > 0
+        fail_msg: "Usage: make rollback ENV=<env> APP=<app> [VERSION=<image tag>]"
+        quiet: true
+
+    - name: Load application definitions
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: catalog
+
+    - name: Roll back to a pinned version
+      when: app_version | default('') | string | length > 0
+      block:
+        - name: Redeploy {{ app_name }} {{ app_version }}
+          ansible.builtin.include_role:
+            name: swarm_app
+            tasks_from: deploy
+          vars:
+            swarm_app_name: "{{ app_name }}"
+            swarm_app_action: rollback
+            swarm_app_overrides:
+              version: "{{ app_version | string }}"
+
+        - name: Save the version to the definition
+          ansible.builtin.include_role:
+            name: swarm_app
+            tasks_from: persist
+          vars:
+            swarm_app_name: "{{ app_name }}"
+            swarm_app_persist:
+              version: "{{ app_version | string }}"
+
+    - name: Roll back to the previous spec (Swarm-native)
+      when: app_version | default('') | string | length == 0
+      block:
+        - name: Read the service
+          community.docker.docker_swarm_service_info:
+            name: "{{ app_name }}"
+          register: rollback_before
+
+        - name: Check there is something to roll back to
+          ansible.builtin.assert:
+            that:
+              - rollback_before.exists
+              - rollback_before.service.PreviousSpec is defined
+            fail_msg: >-
+              {{ app_name }} has no previous spec to roll back to (not deployed, never updated, or Swarm
+              already rolled it back automatically). Roll back to a known version instead:
+              make rollback ENV={{ env_name }} APP={{ app_name }} VERSION=<tag>  (see make history)
+            quiet: true
+
+        - name: Ask Swarm to roll back
+          ansible.builtin.command:
+            argv: [docker, service, rollback, --detach, "{{ app_name }}"]
+          changed_when: true
+
+        - name: Wait for the rollback
+          ansible.builtin.include_role:
+            name: swarm_app
+            tasks_from: wait
+          vars:
+            swarm_app_name: "{{ app_name }}"
+            swarm_app_update_started: true
+            swarm_app_expect_rollback: true
+
+        - name: Read the service after the rollback
+          community.docker.docker_swarm_service_info:
+            name: "{{ app_name }}"
+          register: rollback_after
+
+        - name: Save the restored version and replicas to the definition
+          ansible.builtin.include_role:
+            name: swarm_app
+            tasks_from: persist
+          vars:
+            swarm_app_name: "{{ app_name }}"
+            swarm_app_persist:
+              version: "{{ rollback_after.service.Spec.TaskTemplate.ContainerSpec.Image | image_tag }}"
+              replicas: "{{ rollback_after.service.Spec.Mode.Replicated.Replicas | int }}"
+
+        - name: Record the rollback
+          ansible.builtin.include_role:
+            name: swarm_app
+            tasks_from: history
+          vars:
+            swarm_app_name: "{{ app_name }}"
+            swarm_app_action: rollback
+            swarm_app:
+              image: "{{ rollback_after.service.Spec.TaskTemplate.ContainerSpec.Image.split('@') | first | regex_replace(':[^:/]+$', '') }}"
+              version: "{{ rollback_after.service.Spec.TaskTemplate.ContainerSpec.Image | image_tag }}"
+              replicas: "{{ rollback_after.service.Spec.Mode.Replicated.Replicas }}"
+            swarm_app_history_note: native

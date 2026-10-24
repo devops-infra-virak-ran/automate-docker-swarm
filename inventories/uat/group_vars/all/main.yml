@@ -1,0 +1,28 @@
+---
+env_name: uat
+
+# --- Access -----------------------------------------------------------------
+ansible_user: ubuntu
+ansible_ssh_private_key_file: ~/.ssh/swarm-uat
+
+swarm_operators: []
+
+# --- Host hardening ---------------------------------------------------------
+firewall_enabled: true
+ssh_allowed_cidrs:
+  - 0.0.0.0/0
+
+# --- Swarm ------------------------------------------------------------------
+swarm_autolock: false
+apps_network: apps_net
+overlay_encrypted: true
+
+# --- Application defaults for this environment ------------------------------
+app_env_defaults:
+  update_config:
+    parallelism: 1
+    delay: 5s
+    monitor: 30s
+  placement:
+    constraints:
+      - node.labels.tier == app

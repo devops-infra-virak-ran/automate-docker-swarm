@@ -1,0 +1,7 @@
+---
+# Restarting dockerd restarts the containers on this node; Swarm reschedules
+# or restarts them. It only fires when daemon.json actually changes.
+- name: Restart docker
+  ansible.builtin.service:
+    name: docker
+    state: restarted

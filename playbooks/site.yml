@@ -1,0 +1,7 @@
+---
+# Full bootstrap of an environment from plain VMs: prepare + swarm.
+- name: Prepare nodes
+  ansible.builtin.import_playbook: prepare.yml
+
+- name: Initialise the swarm
+  ansible.builtin.import_playbook: cluster-init.yml

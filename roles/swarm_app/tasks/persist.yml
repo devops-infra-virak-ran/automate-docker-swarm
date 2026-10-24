@@ -1,0 +1,15 @@
+---
+# Write `key: value` back into inventories/<env>/apps/<app>.yml so the repo
+# stays the source of truth after an ad-hoc update/scale/rollback/remove.
+# Input: swarm_app_name, swarm_app_persist (dict of top-level keys to set).
+- name: "{{ swarm_app_name }} | save changes to the definition file"
+  ansible.builtin.lineinfile:
+    path: "{{ swarm_app_definitions_dir }}/{{ swarm_app_name }}.yml"
+    regexp: "^{{ item.key }}:"
+    line: "{{ item.key }}: {{ item.value | to_json }}"
+    insertafter: "^---"
+  loop: "{{ swarm_app_persist | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}: {{ item.value }}"
+  delegate_to: localhost
+  become: false

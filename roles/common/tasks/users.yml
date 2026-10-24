@@ -1,0 +1,30 @@
+---
+# Membership of the docker group is root-equivalent, so it is granted only to
+# the operators listed for this environment — nobody else on the node.
+
+- name: Ensure the docker group exists
+  ansible.builtin.group:
+    name: docker
+    system: true
+
+- name: Manage operator accounts
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    groups: docker
+    append: true
+    shell: /bin/bash
+    state: "{{ item.state | default('present') }}"
+    remove: "{{ (item.state | default('present')) == 'absent' }}"
+  loop: "{{ swarm_operators }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Install operator SSH keys (exclusive — stray keys are removed)
+  ansible.posix.authorized_key:
+    user: "{{ item.name }}"
+    key: "{{ item.pubkey }}"
+    exclusive: true
+  loop: "{{ swarm_operators }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: (item.state | default('present')) == 'present'

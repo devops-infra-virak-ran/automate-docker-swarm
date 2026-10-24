@@ -1,0 +1,99 @@
+---
+# Converge one application to its definition (+ overrides).
+# Input: swarm_app_name; optional swarm_app_overrides, swarm_app_action.
+
+- name: "{{ swarm_app_name }} | resolve definition"
+  ansible.builtin.include_tasks: resolve.yml
+
+- name: "{{ swarm_app_name }} | remove (definition says state: absent)"
+  ansible.builtin.include_tasks: remove.yml
+  when: swarm_app.state == 'absent'
+
+- name: "{{ swarm_app_name }} | deploy"
+  when: swarm_app.state == 'present'
+  vars:
+    _labels:
+      "io.swarm-automation.managed": "true"
+      "io.swarm-automation.env": "{{ env_name }}"
+      "io.swarm-automation.app": "{{ swarm_app_name }}"
+  block:
+    # Configs and secrets are immutable: a changed value becomes a new
+    # <app>_<name>_vN object, and the service switches over in the same
+    # rolling update as everything else.
+    - name: "{{ swarm_app_name }} | render configs"
+      community.docker.docker_config:
+        name: "{{ swarm_app_name }}_{{ item.name }}"
+        data: >-
+          {{ lookup('ansible.builtin.template', swarm_app_templates_dir ~ '/' ~ item.template)
+             if item.template is defined else item.content }}
+        labels: "{{ _labels }}"
+        rolling_versions: true
+        versions_to_keep: "{{ swarm_app_versions_to_keep }}"
+      loop: "{{ swarm_app.configs }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ item.target }}"
+      register: swarm_app_config_results
+
+    - name: "{{ swarm_app_name }} | create secrets from the vault"
+      community.docker.docker_secret:
+        name: "{{ swarm_app_name }}_{{ item.name }}"
+        data: "{{ vault_app_secrets[item.vault_key] }}"
+        labels: "{{ _labels }}"
+        rolling_versions: true
+        versions_to_keep: "{{ swarm_app_versions_to_keep }}"
+      loop: "{{ swarm_app.secrets }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: swarm_app_secret_results
+      no_log: true
+
+    - name: "{{ swarm_app_name }} | create or update the service"
+      community.docker.docker_swarm_service:
+        name: "{{ swarm_app_name }}"
+        image: "{{ swarm_app.image }}:{{ swarm_app.version }}"
+        replicas: "{{ swarm_app.replicas | int }}"
+        command: "{{ swarm_app.command | default(omit) }}"
+        args: "{{ swarm_app.args | default(omit) }}"
+        env: >-
+          {{ swarm_app.env | combine({'APP_ENV': env_name, 'APP_VERSION': swarm_app.version}) | env_list }}
+        publish: "{{ swarm_app.publish }}"
+        networks:
+          - "{{ apps_network }}"
+        configs: "{{ swarm_app_config_results.results | swarm_refs('config') }}"
+        secrets: "{{ swarm_app_secret_results.results | swarm_refs('secret') }}"
+        healthcheck: "{{ swarm_app.healthcheck if swarm_app.healthcheck else omit }}"
+        limits: "{{ swarm_app.resources.limits if swarm_app.resources.limits else omit }}"
+        reservations: "{{ swarm_app.resources.reservations if swarm_app.resources.reservations else omit }}"
+        placement: "{{ swarm_app.placement }}"
+        update_config: "{{ swarm_app.update_config }}"
+        rollback_config: "{{ swarm_app.rollback_config }}"
+        restart_config: "{{ swarm_app.restart_config }}"
+        stop_grace_period: "{{ swarm_app.stop_grace_period }}"
+        labels: "{{ _labels | combine({'io.swarm-automation.version': swarm_app.version}) }}"
+        container_labels: "{{ _labels | combine({'io.swarm-automation.version': swarm_app.version}) }}"
+        state: present
+      register: swarm_app_service
+
+    - name: "{{ swarm_app_name }} | wait for the rollout"
+      ansible.builtin.include_tasks: wait.yml
+      vars:
+        # Only a change to the task template starts a rolling update; scaling
+        # or relabelling a service does not, so there is nothing to wait for.
+        swarm_app_update_started: >-
+          {{ swarm_app_service is changed
+             and swarm_app_service.changes | default([]) | difference(['replicas', 'labels']) | length > 0 }}
+
+    - name: "{{ swarm_app_name }} | smoke test through the routing mesh"
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ swarm_app.smoke_check.port }}{{ swarm_app.smoke_check.path | default('/') }}"
+        status_code: 200
+        return_content: false
+      register: swarm_app_smoke
+      until: swarm_app_smoke.status == 200
+      retries: 10
+      delay: 3
+      when: swarm_app.smoke_check is truthy
+
+    - name: "{{ swarm_app_name }} | record the deployment"
+      ansible.builtin.include_tasks: history.yml
+      when: swarm_app_service is changed

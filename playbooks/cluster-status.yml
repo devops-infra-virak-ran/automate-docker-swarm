@@ -1,0 +1,64 @@
+---
+- name: Check every node's Docker and Swarm state
+  hosts: swarm_nodes
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read Docker host info
+      community.docker.docker_host_info:
+      register: status_host
+      ignore_unreachable: true
+      ignore_errors: true
+
+    - name: Record node health
+      ansible.builtin.set_fact:
+        status_node: >-
+          {{ 'unreachable' if status_host.unreachable | default(false)
+             else status_host.host_info.Swarm.LocalNodeState | default('docker-down') }}
+
+- name: Cluster status
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read swarm and nodes
+      community.docker.docker_swarm_info:
+        nodes: true
+      register: status_swarm
+
+    - name: Read services with running/desired replicas
+      ansible.builtin.command:
+        argv: [docker, service, ls, --format, !unsafe '{{.Name}} {{.Replicas}}']
+      register: status_service_replicas
+      changed_when: false
+
+    - name: Summarise
+      vars:
+        _nodes: "{{ status_swarm.nodes }}"
+        _managers: "{{ _nodes | selectattr('ManagerStatus') | list }}"
+        _reachable: "{{ _managers | selectattr('ManagerStatus', 'in', ['Leader', 'reachable']) | list }}"
+        _quorum: "{{ (_managers | length // 2) + 1 }}"
+        _quorum_state: "{{ 'OK' if _reachable | length >= _quorum | int else 'LOST' }}"
+        _not_ready: "{{ _nodes | rejectattr('Status', 'eq', 'ready') | map(attribute='Hostname') | list }}"
+        _off: >-
+          {{ groups['swarm_nodes'] | zip(groups['swarm_nodes'] | map('extract', hostvars, 'status_node'))
+             | rejectattr(1, 'eq', 'active') | map('join', ': ') | list }}
+        _degraded: "{{ status_service_replicas.stdout_lines | degraded_services }}"
+      ansible.builtin.debug:
+        msg:
+          - "Environment     : {{ env_name | upper }}"
+          - "Cluster ID      : {{ status_swarm.swarm_facts.ID }}"
+          - "Nodes           : {{ _nodes | length }} ({{ _managers | length }} managers, {{ _nodes | length - _managers | length }} workers)"
+          - "Manager quorum  : {{ _reachable | length }}/{{ _managers | length }} reachable, need {{ _quorum }} -> {{ _quorum_state }}"
+          - "Nodes not ready : {{ _not_ready | join(', ') or 'none' }}"
+          - "Inventory hosts not active in the swarm: {{ _off | join(', ') or 'none' }}"
+          - "Services        : {{ status_service_replicas.stdout_lines | length }}, degraded: {{ _degraded | join(', ') or 'none' }}"
+
+    - name: Services
+      ansible.builtin.command: docker service ls
+      register: status_services
+      changed_when: false
+
+    - name: Show services
+      ansible.builtin.debug:
+        msg: "{{ status_services.stdout }}"

@@ -1,0 +1,11 @@
+---
+# Destructive operations against PROD need an explicit confirm=yes, whether
+# they come from the Makefile (CONFIRM=yes) or a direct ansible-playbook run.
+- name: Require confirmation for destructive changes in PROD
+  ansible.builtin.assert:
+    that: env_name != 'prod' or (confirm | default('') | string | lower) in ['yes', 'true']
+    fail_msg: >-
+      Refusing to run '{{ ansible_play_name }}' against PROD without confirmation.
+      Re-run with CONFIRM=yes (Makefile) or -e confirm=yes.
+    quiet: true
+  run_once: true

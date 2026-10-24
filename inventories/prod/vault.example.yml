@@ -1,0 +1,13 @@
+---
+# Template for inventories/prod/group_vars/all/vault.yml.
+# Create the real (encrypted) file with:  make vault-init ENV=prod
+# Every CHANGE_ME is replaced by a random 32-char value, then the file is
+# encrypted with the prod-only password in .vault/prod.pass (never committed).
+#
+# Apps reference these keys from inventories/prod/apps/<app>.yml:
+#   secrets:
+#     - name: redis_password            # file name under /run/secrets/
+#       vault_key: cache_redis_password # key below
+vault_app_secrets:
+  cache_redis_password: CHANGE_ME
+  web_api_token: CHANGE_ME

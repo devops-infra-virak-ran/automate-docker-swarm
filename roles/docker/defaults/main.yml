@@ -1,0 +1,20 @@
+---
+# The project targets existing VMs: if Docker is already installed it is left
+# alone. Set to true to (re)install Docker CE from download.docker.com.
+docker_force_install: false
+
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Merged into any existing /etc/docker/daemon.json (existing keys such as
+# insecure-registries are kept). Log rotation stops container logs filling
+# the disk. Note: `live-restore` is not supported in Swarm mode.
+docker_daemon_config:
+  log-driver: json-file
+  log-opts:
+    max-size: 10m
+    max-file: "3"

@@ -1,0 +1,5 @@
+---
+# Lab nodes are containers: talk to them with `docker exec`, as root.
+ansible_connection: community.docker.docker
+ansible_python_interpreter: /usr/bin/python3
+ansible_become: false

@@ -1,0 +1,16 @@
+---
+env_name: lab
+
+# OS preparation (apt, sshd, ufw) does not apply to containers.
+firewall_enabled: false
+swarm_operators: []
+
+swarm_autolock: false
+apps_network: apps_net
+overlay_encrypted: false
+
+app_env_defaults:
+  update_config:
+    parallelism: 1
+    delay: 2s
+    monitor: 20s

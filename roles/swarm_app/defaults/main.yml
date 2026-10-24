@@ -1,0 +1,62 @@
+---
+# Overlay network every application joins (set per environment in group_vars).
+apps_network: apps_net
+overlay_encrypted: false
+
+# Where application definitions live (on the Ansible controller).
+swarm_app_definitions_dir: "{{ inventory_dir }}/apps"
+# Jinja templates referenced by `configs[].template`.
+swarm_app_templates_dir: "{{ playbook_dir }}/../templates/apps"
+
+# Deploy history, kept on the bootstrap manager.
+swarm_app_history_dir: /var/lib/swarm-automation/history
+
+# Configs and secrets are immutable in Swarm, so every change creates
+# <app>_<name>_vN. Keep the current and previous generation so that
+# `docker service rollback` still finds the files it needs.
+swarm_app_versions_to_keep: 2
+
+# How long to wait for a rollout to finish, in seconds.
+swarm_app_wait_timeout: 300
+
+
+# Operator recorded in the history log.
+swarm_app_operator: "{{ lookup('ansible.builtin.env', 'USER') | default('unknown', true) }}"
+
+# Built-in defaults for every application. Overridden by app_env_defaults
+# (group_vars) and then by the application's own definition file.
+swarm_app_defaults:
+  state: present
+  replicas: 1
+  publish: []
+  env: {}
+  configs: []
+  secrets: []
+  healthcheck:
+  smoke_check:
+  stop_grace_period: 10s
+  resources:
+    limits: {}
+    reservations: {}
+  placement:
+    constraints: []
+    preferences: []
+  # Rolling update: one task at a time, new task started before the old one
+  # stops, watched for `monitor` and rolled back automatically if it fails.
+  update_config:
+    parallelism: 1
+    delay: 10s
+    order: start-first
+    failure_action: rollback
+    monitor: 30s
+    max_failure_ratio: 0
+  rollback_config:
+    parallelism: 0
+    order: start-first
+    failure_action: pause
+    monitor: 10s
+  # `any`, not `on-failure`: a container that exits 0 (e.g. on SIGTERM during a
+  # node reboot) must be restarted too, or the service silently drops to 0/N.
+  restart_config:
+    condition: any
+    delay: 5s

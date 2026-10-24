@@ -1,0 +1,26 @@
+---
+- name: Check the operating system is supported
+  ansible.builtin.assert:
+    that: ansible_facts['os_family'] == 'Debian'
+    fail_msg: "Only Debian/Ubuntu hosts are supported, {{ inventory_hostname }} is {{ ansible_facts['distribution'] }}."
+    quiet: true
+
+- name: Install base packages
+  ansible.builtin.import_tasks: packages.yml
+
+- name: Set the hostname
+  ansible.builtin.import_tasks: hostname.yml
+  when: manage_hostname | bool
+
+- name: Harden SSH
+  ansible.builtin.import_tasks: ssh.yml
+  tags: [security]
+
+- name: Manage operator accounts
+  ansible.builtin.import_tasks: users.yml
+  tags: [security]
+
+- name: Configure the firewall
+  ansible.builtin.import_tasks: firewall.yml
+  when: firewall_enabled | bool
+  tags: [security, firewall]

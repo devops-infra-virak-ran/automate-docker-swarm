@@ -1,0 +1,39 @@
+---
+# Change the number of replicas and save it to the definition file.
+#   make scale ENV=dev APP=web REPLICAS=4
+- name: Scale an application
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check the request
+      ansible.builtin.assert:
+        that:
+          - app_name | default('') | length > 0
+          - app_replicas | default('') | string is match('^[0-9]+$')
+        fail_msg: "Usage: make scale ENV=<env> APP=<app> REPLICAS=<0..n>"
+        quiet: true
+
+    - name: Load application definitions
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: catalog
+
+    - name: Scale {{ app_name }} to {{ app_replicas }}
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: deploy
+      vars:
+        swarm_app_name: "{{ app_name }}"
+        swarm_app_action: scale
+        swarm_app_overrides:
+          replicas: "{{ app_replicas | int }}"
+
+    - name: Save the replica count to the definition
+      ansible.builtin.include_role:
+        name: swarm_app
+        tasks_from: persist
+      vars:
+        swarm_app_name: "{{ app_name }}"
+        swarm_app_persist:
+          replicas: "{{ app_replicas | int }}"

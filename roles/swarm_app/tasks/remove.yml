@@ -1,0 +1,30 @@
+---
+# Remove swarm_app_name and every config/secret created for it.
+
+- name: "{{ swarm_app_name }} | remove the service"
+  community.docker.docker_swarm_service:
+    name: "{{ swarm_app_name }}"
+    state: absent
+  register: swarm_app_removed
+
+- name: "{{ swarm_app_name }} | find its configs and secrets"
+  ansible.builtin.command:
+    argv: [docker, "{{ item }}", ls, -q, --filter, "label=io.swarm-automation.app={{ swarm_app_name }}"]
+  loop: [config, secret]
+  register: swarm_app_leftovers
+  changed_when: false
+
+- name: "{{ swarm_app_name }} | delete its configs and secrets"
+  ansible.builtin.command:
+    argv: "{{ ['docker', item.item, 'rm'] + item.stdout_lines }}"
+  loop: "{{ swarm_app_leftovers.results }}"
+  loop_control:
+    label: "{{ item.item }}: {{ item.stdout_lines | length }}"
+  when: item.stdout_lines | length > 0
+  changed_when: true
+
+- name: "{{ swarm_app_name }} | record the removal"
+  ansible.builtin.include_tasks: history.yml
+  vars:
+    swarm_app_action: remove
+  when: swarm_app_removed is changed

@@ -1,0 +1,136 @@
+---
+# Remove a node safely:
+#   1. demote it if it is a manager (refusing to break quorum)
+#   2. drain it, so its tasks are rescheduled elsewhere first
+#   3. make it leave the swarm (if it is still reachable)
+#   4. delete it from the manager's node list
+# Then delete it from inventories/<env>/hosts.yml.
+#
+#   make node-remove ENV=<env> NODE=<inventory name>
+- name: Read the node's own swarm ID
+  hosts: "{{ node_name | default('-') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read Docker host info
+      community.docker.docker_host_info:
+      register: leaving_host
+      ignore_unreachable: true
+      ignore_errors: true
+
+- name: Demote and drain
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check confirmation for PROD
+      ansible.builtin.import_tasks: tasks/prod-guard.yml
+
+    - name: Check the request
+      ansible.builtin.assert:
+        that:
+          - node_name is defined and node_name | length > 0
+          - node_name != inventory_hostname
+        fail_msg: >-
+          Cannot remove '{{ node_name | default('') }}': it is the bootstrap manager all playbooks talk to.
+          Move another manager to the top of `managers` in the inventory first.
+        quiet: true
+
+    - name: Read nodes
+      community.docker.docker_swarm_info:
+        nodes: true
+      register: remove_nodes
+
+    - name: Find the node
+      ansible.builtin.set_fact:
+        remove_node: >-
+          {{ (remove_nodes.nodes | selectattr('ID', 'eq', hostvars[node_name].leaving_host.host_info.Swarm.NodeID) | list
+              if hostvars[node_name].leaving_host.host_info.Swarm.NodeID | default('') else [])
+             or (remove_nodes.nodes | selectattr('Hostname', 'eq', node_name) | list) }}
+
+    - name: Nothing to do — node is not in the swarm
+      ansible.builtin.debug:
+        msg: "{{ node_name }} is not a member of the {{ env_name }} swarm."
+      when: remove_node | length == 0
+
+    - name: Stop if the hostname is ambiguous
+      ansible.builtin.assert:
+        that: remove_node | length <= 1
+        fail_msg: "Several swarm nodes are called {{ node_name }}; remove by ID with `docker node rm`."
+        quiet: true
+
+    - name: Demote and drain the node
+      when: remove_node | length == 1
+      vars:
+        _node: "{{ remove_node | first }}"
+        _managers: "{{ remove_nodes.nodes | selectattr('ManagerStatus') | list }}"
+      block:
+        - name: Refuse to break manager quorum
+          ansible.builtin.assert:
+            that: _node.ManagerStatus | default(none) is falsy or _managers | length > 1
+            fail_msg: "{{ node_name }} is the last manager; add another manager before removing it."
+            quiet: true
+
+        - name: Demote to worker
+          community.docker.docker_node:
+            hostname: "{{ _node.ID }}"
+            role: worker
+          when: _node.ManagerStatus | default(none) is truthy
+
+        - name: Drain (move its tasks to other nodes)
+          community.docker.docker_node:
+            hostname: "{{ _node.ID }}"
+            availability: drain
+
+        - name: Wait until no tasks run on the node
+          ansible.builtin.command:
+            argv: [docker, node, ps, "{{ _node.ID }}", -q, --filter, desired-state=running]
+          register: remove_node_tasks
+          until: remove_node_tasks.stdout_lines | length == 0
+          retries: 30
+          delay: 5
+          changed_when: false
+
+- name: Leave the swarm
+  hosts: "{{ node_name | default('-') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Leave
+      community.docker.docker_swarm:
+        state: absent
+        force: true
+      when: hostvars[groups['managers'][0]].remove_node | length == 1
+      ignore_unreachable: true
+
+- name: Delete the node from the cluster
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Remove the node entry
+      when: remove_node | length == 1
+      block:
+        - name: Wait until the swarm sees the node as down
+          community.docker.docker_swarm_info:
+            nodes: true
+          register: remove_nodes_after
+          until: >-
+            remove_nodes_after.nodes | selectattr('ID', 'eq', (remove_node | first).ID)
+            | rejectattr('Status', 'eq', 'down') | list | length == 0
+          retries: 12
+          delay: 5
+          failed_when: false
+
+        - name: Remove it
+          community.docker.docker_swarm:
+            state: remove
+            node_id: "{{ (remove_node | first).ID }}"
+            force: true
+
+        - name: Remind to update the inventory
+          ansible.builtin.debug:
+            msg: "{{ node_name }} removed. Now delete it from inventories/{{ env_name }}/hosts.yml and commit."
+
+- name: Show the result
+  ansible.builtin.import_playbook: node-list.yml

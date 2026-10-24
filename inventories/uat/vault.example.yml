@@ -1,0 +1,13 @@
+---
+# Template for inventories/uat/group_vars/all/vault.yml.
+# Create the real (encrypted) file with:  make vault-init ENV=uat
+# Every CHANGE_ME is replaced by a random 32-char value, then the file is
+# encrypted with the uat-only password in .vault/uat.pass (never committed).
+#
+# Apps reference these keys from inventories/uat/apps/<app>.yml:
+#   secrets:
+#     - name: redis_password            # file name under /run/secrets/
+#       vault_key: cache_redis_password # key below
+vault_app_secrets:
+  cache_redis_password: CHANGE_ME
+  web_api_token: CHANGE_ME

@@ -1,0 +1,50 @@
+---
+# Add a node: first add it to inventories/<env>/hosts.yml (under managers or
+# workers, with ansible_host and swarm_addr), then run
+#   make node-add ENV=<env> NODE=<inventory name>
+- name: Validate the request
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Check NODE is in the inventory
+      ansible.builtin.assert:
+        that:
+          - node_name is defined and node_name | length > 0
+          - node_name in groups['swarm_nodes'] | default([])
+        fail_msg: >-
+          Add '{{ node_name | default('') }}' to inventories/<env>/hosts.yml under managers or workers first
+          (with ansible_host and swarm_addr), then re-run.
+        quiet: true
+
+# Existing nodes must allow Swarm traffic from the new node's address.
+- name: Open the firewall on existing nodes for the new node
+  hosts: "swarm_nodes:!{{ node_name | default('-') }}"
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Update firewall rules
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: firewall
+      when: firewall_enabled | default(true) | bool
+      tags: [prepare, firewall]
+
+- name: Prepare the new node
+  hosts: "{{ node_name | default('-') }}"
+  become: true
+  gather_facts: true
+  roles:
+    - role: common
+      tags: [prepare]
+    - role: docker
+      tags: [prepare]
+
+- name: Join the new node to the swarm
+  hosts: "managers[0]:{{ node_name | default('-') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - role: swarm
+
+- name: Show the result
+  ansible.builtin.import_playbook: node-list.yml

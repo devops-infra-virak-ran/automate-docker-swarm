@@ -1,0 +1,26 @@
+---
+# Docker configs and secrets managed in this environment. Secret VALUES are
+# never shown — Swarm itself cannot return them.
+#   make configs ENV=dev
+- name: List configs and secrets
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read configs and secrets
+      ansible.builtin.command:
+        argv:
+          - docker
+          - "{{ item }}"
+          - ls
+          - --filter
+          - "label=io.swarm-automation.env={{ env_name }}"
+          - --format
+          - !unsafe "table {{.Name}}\t{{.CreatedAt}}"
+      loop: [config, secret]
+      register: config_objects
+      changed_when: false
+
+    - name: Configs and secrets in {{ env_name | upper }}
+      ansible.builtin.debug:
+        msg: "{{ config_objects.results[0].stdout ~ '\n\n' ~ config_objects.results[1].stdout }}"

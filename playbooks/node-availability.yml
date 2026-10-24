@@ -1,0 +1,23 @@
+---
+# Take a node out of service for maintenance (drain) or put it back (active).
+#   make node-drain    ENV=<env> NODE=<name>
+#   make node-activate ENV=<env> NODE=<name>
+- name: Set node availability
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check the request
+      ansible.builtin.assert:
+        that:
+          - node_name is defined and node_name | length > 0
+          - availability in ['active', 'drain', 'pause']
+        quiet: true
+
+    - name: Set {{ node_name }} to {{ availability }}
+      community.docker.docker_node:
+        hostname: "{{ node_name }}"
+        availability: "{{ availability }}"
+
+- name: Show the result
+  ansible.builtin.import_playbook: node-list.yml

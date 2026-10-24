@@ -1,0 +1,29 @@
+---
+# Set the OS hostname to the inventory name, so `docker node ls` matches the
+# inventory (Swarm reports the OS hostname, not the inventory name).
+manage_hostname: true
+
+common_packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - python3
+  - python3-debian   # needed by deb822_repository (Docker apt repo)
+  - ufw
+  - unattended-upgrades
+
+# --- SSH --------------------------------------------------------------------
+ssh_port: 22
+
+# --- Firewall (ufw) ---------------------------------------------------------
+# Swarm ports are opened only to the other cluster nodes (their swarm_addr).
+# Note: ports published by Swarm services go through Docker's own iptables
+# chains and are reachable regardless of ufw — restrict those upstream
+# (security group / load balancer).
+firewall_enabled: true
+ssh_allowed_cidrs:
+  - 0.0.0.0/0
+
+# --- Operators --------------------------------------------------------------
+# [{ name: alice, pubkey: "ssh-ed25519 AAAA...", state: present|absent }]
+swarm_operators: []

@@ -1,0 +1,44 @@
+---
+- name: Work out whether this node already belongs to our swarm
+  ansible.builtin.set_fact:
+    swarm_joined: "{{ swarm_host.host_info.Swarm.LocalNodeState == 'active' }}"
+    swarm_in_our_cluster: >-
+      {{ (hostvars[swarm_leader].swarm_addr ~ ':2377')
+         in (swarm_host.host_info.Swarm.RemoteManagers | default([], true) | map(attribute='Addr') | list) }}
+
+# The docker_swarm module reports "ok" for a node that is in *any* swarm, so a
+# VM left over from another cluster would silently stay there. Stop instead.
+- name: Refuse to steal a node from another swarm
+  ansible.builtin.assert:
+    that: not swarm_joined or swarm_in_our_cluster
+    fail_msg: >-
+      {{ inventory_hostname }} is already part of a different swarm
+      (managers: {{ swarm_host.host_info.Swarm.RemoteManagers | default([], true) | map(attribute='Addr') | join(', ') }}).
+      Run `docker swarm leave --force` on it first if it really should move.
+    quiet: true
+
+- name: Join the swarm
+  when: not swarm_joined
+  block:
+    - name: Fetch join tokens from the bootstrap manager
+      community.docker.docker_swarm_info:
+      delegate_to: "{{ swarm_leader }}"
+      register: swarm_leader_info
+      no_log: true
+
+    - name: Join as {{ 'manager' if inventory_hostname in groups['managers'] else 'worker' }}
+      community.docker.docker_swarm:
+        state: join
+        advertise_addr: "{{ swarm_addr }}"
+        remote_addrs:
+          - "{{ hostvars[swarm_leader].swarm_addr }}:2377"
+        join_token: >-
+          {{ swarm_leader_info.swarm_facts.JoinTokens.Manager
+             if inventory_hostname in groups['managers']
+             else swarm_leader_info.swarm_facts.JoinTokens.Worker }}
+      no_log: true
+
+# Outside the block on purpose: a skipped task would overwrite the register.
+- name: Re-read this node's Swarm state
+  community.docker.docker_host_info:
+  register: swarm_host

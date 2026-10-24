@@ -1,0 +1,32 @@
+---
+# Create the application overlay network once. An overlay network cannot be
+# changed while services use it, so an existing one is never re-created —
+# a mismatch is reported instead.
+- name: Look for the application overlay network
+  community.docker.docker_network_info:
+    name: "{{ apps_network }}"
+  register: swarm_app_network
+
+- name: Create the application overlay network
+  community.docker.docker_network:
+    name: "{{ apps_network }}"
+    driver: overlay
+    scope: swarm
+    attachable: false
+    driver_options: "{{ {'encrypted': 'true'} if overlay_encrypted | default(false) | bool else {} }}"
+    labels:
+      io.swarm-automation.managed: "true"
+      io.swarm-automation.env: "{{ env_name }}"
+  when: not swarm_app_network.exists
+
+- name: Check the existing network matches overlay_encrypted
+  ansible.builtin.assert:
+    that: >-
+      ('encrypted' in (swarm_app_network.network.Options | default({}, true)))
+      == (overlay_encrypted | default(false) | bool)
+    fail_msg: >-
+      {{ apps_network }} exists with encrypted={{ 'encrypted' in (swarm_app_network.network.Options | default({}, true)) }}
+      but overlay_encrypted={{ overlay_encrypted | default(false) }}. Changing it requires removing every
+      service on the network first (make remove ...), then `docker network rm {{ apps_network }}`, then make deploy.
+    quiet: true
+  when: swarm_app_network.exists

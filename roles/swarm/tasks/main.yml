@@ -1,0 +1,23 @@
+---
+- name: Check the inventory describes this node
+  ansible.builtin.assert:
+    that:
+      - groups['managers'] | default([]) | length > 0
+      - swarm_addr is defined
+    fail_msg: "{{ inventory_hostname }} needs swarm_addr in the inventory, and the inventory needs at least one host in `managers`."
+    quiet: true
+
+- name: Read this node's Swarm state
+  community.docker.docker_host_info:
+  register: swarm_host
+
+- name: Initialise the swarm on the bootstrap manager
+  ansible.builtin.include_tasks: init.yml
+  when: inventory_hostname == swarm_leader
+
+- name: Join the other nodes
+  ansible.builtin.include_tasks: join.yml
+  when: inventory_hostname != swarm_leader
+
+- name: Reconcile node role and labels
+  ansible.builtin.include_tasks: node.yml

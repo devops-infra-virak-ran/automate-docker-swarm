@@ -1,0 +1,7 @@
+---
+# LAB ONLY — throwaway values, deliberately not encrypted so the lab works
+# without a vault password. Real environments use an encrypted vault.yml
+# (make vault-init ENV=dev|uat|prod).
+vault_app_secrets:
+  cache_redis_password: lab-only-not-a-secret
+  web_api_token: lab-only-not-a-secret

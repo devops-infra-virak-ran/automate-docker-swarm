@@ -1,0 +1,18 @@
+---
+- name: Initialise the swarm (no-op when already initialised)
+  community.docker.docker_swarm:
+    state: present
+    advertise_addr: "{{ swarm_addr }}"
+    autolock_managers: "{{ swarm_autolock | bool }}"
+  register: swarm_init
+
+- name: Re-read this node's Swarm state
+  community.docker.docker_host_info:
+  register: swarm_host
+
+- name: Remind the operator to store the unlock key
+  ansible.builtin.debug:
+    msg: >-
+      Autolock is on. Run `docker swarm unlock-key` on {{ inventory_hostname }} and store the
+      key somewhere safe (e.g. the {{ env_name }} vault). Restarted managers need it.
+  when: swarm_autolock | bool and swarm_init is changed

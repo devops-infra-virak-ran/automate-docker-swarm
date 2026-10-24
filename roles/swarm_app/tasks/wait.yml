@@ -1,0 +1,93 @@
+---
+# Block until Swarm has finished rolling out swarm_app_name, then fail loudly
+# if it rolled back or its tasks are not all running.
+#
+# Input: swarm_app_update_started — a rolling update was just triggered
+#        swarm_app_expect_rollback — the caller asked for a rollback (so
+#                                    rollback_completed is success)
+
+# Swarm clears UpdateStatus when a spec changes and sets it again when the
+# updater starts. Wait for that, so we never read the previous update's
+# "completed" and declare victory too early.
+- name: "{{ swarm_app_name }} | wait for Swarm to start the rolling update"
+  community.docker.docker_swarm_service_info:
+    name: "{{ swarm_app_name }}"
+  register: swarm_app_info
+  until: swarm_app_info.service.UpdateStatus is defined
+  retries: 10
+  delay: 2
+  failed_when: false
+  when: swarm_app_update_started | default(false) | bool
+
+- name: "{{ swarm_app_name }} | wait for the rolling update to finish"
+  community.docker.docker_swarm_service_info:
+    name: "{{ swarm_app_name }}"
+  register: swarm_app_info
+  until: >-
+    swarm_app_info.service.UpdateStatus is not defined
+    or swarm_app_info.service.UpdateStatus.State not in ['updating', 'rollback_started']
+  retries: "{{ (swarm_app_wait_timeout | int / 5) | round(0, 'ceil') | int }}"
+  delay: 5
+
+- name: "{{ swarm_app_name }} | record the automatic rollback"
+  ansible.builtin.include_tasks: history.yml
+  vars:
+    swarm_app_action: auto-rollback
+    swarm_app_history_note: "reason={{ swarm_app_info.service.UpdateStatus.Message | default('?') | replace(' ', '_') }}"
+  when:
+    - swarm_app_info.service.UpdateStatus.State | default('') in ['rollback_completed', 'rollback_paused', 'paused']
+    - not swarm_app_expect_rollback | default(false) | bool
+    - swarm_app is defined
+
+- name: "{{ swarm_app_name }} | check the outcome of the update"
+  vars:
+    _state: "{{ swarm_app_info.service.UpdateStatus.State | default('none') }}"
+    _ok: "{{ ['completed', 'none', 'rollback_completed'] if swarm_app_expect_rollback | default(false) else ['completed', 'none'] }}"
+  ansible.builtin.assert:
+    that: _state in _ok
+    fail_msg: >-
+      {{ swarm_app_name }}: update ended in state '{{ _state }}' —
+      {{ swarm_app_info.service.UpdateStatus.Message | default('') }}.
+      {% if _state == 'rollback_completed' %}The new version failed its health checks, so Swarm rolled back
+      to the previous one automatically. The definition file was NOT changed.{% endif %}
+      Inspect with: docker service ps {{ swarm_app_name }} --no-trunc
+    success_msg: "{{ swarm_app_name }}: update state '{{ _state }}'"
+
+- name: "{{ swarm_app_name }} | wait until every replica is running and healthy"
+  community.docker.docker_swarm_info:
+    tasks: true
+    tasks_filters:
+      service: "{{ swarm_app_name }}"
+      desired-state: running
+    # Non-verbose output crashes on tasks that have no container yet (pending).
+    verbose_output: true
+  register: swarm_app_tasks
+  until: >-
+    swarm_app_tasks.tasks | selectattr('Status.State', 'eq', 'running') | list | length
+    >= swarm_app_info.service.Spec.Mode.Replicated.Replicas | default(0) | int
+  retries: "{{ (swarm_app_wait_timeout | int / 5) | round(0, 'ceil') | int }}"
+  delay: 5
+  failed_when: false
+
+# Rejected/failed tasks are no longer "desired running", so read the most
+# recent errors from the full task list for the failure message.
+- name: "{{ swarm_app_name }} | collect recent task errors"
+  ansible.builtin.command:
+    argv: [docker, service, ps, "{{ swarm_app_name }}", --no-trunc, --format, !unsafe "{{.CurrentState}}: {{.Error}}"]
+  register: swarm_app_task_errors
+  changed_when: false
+  failed_when: false
+  when: >-
+    swarm_app_tasks.tasks | default([]) | selectattr('Status.State', 'eq', 'running') | list | length
+    < swarm_app_info.service.Spec.Mode.Replicated.Replicas | default(0) | int
+
+- name: "{{ swarm_app_name }} | report replicas"
+  vars:
+    _running: "{{ swarm_app_tasks.tasks | default([]) | selectattr('Status.State', 'eq', 'running') | list | length }}"
+    _desired: "{{ swarm_app_info.service.Spec.Mode.Replicated.Replicas | default(0) | int }}"
+  ansible.builtin.assert:
+    that: _running | int >= _desired | int
+    fail_msg: >-
+      {{ swarm_app_name }}: only {{ _running }}/{{ _desired }} replicas running after {{ swarm_app_wait_timeout }}s.
+      Recent tasks: {{ (swarm_app_task_errors.stdout_lines | default([]))[:5] | join(' | ') or 'none' }}.
+    success_msg: "{{ swarm_app_name }}: {{ _running }}/{{ _desired }} replicas running"

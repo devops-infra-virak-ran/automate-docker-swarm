@@ -1,0 +1,33 @@
+---
+# Deployment history of one application (kept on the bootstrap manager), plus
+# Swarm's own view of its current and previous task generations.
+#   make history ENV=dev APP=web [LINES=20]
+- name: Show application history
+  hosts: managers[0]
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check the request
+      ansible.builtin.assert:
+        that: app_name | default('') | length > 0
+        fail_msg: "Usage: make history ENV=<env> APP=<app>"
+        quiet: true
+
+    - name: Read the deploy log
+      ansible.builtin.command:
+        argv: [tail, -n, "{{ lines | default(20) }}", "/var/lib/swarm-automation/history/{{ app_name }}.log"]
+      register: history_log
+      changed_when: false
+      failed_when: false
+
+    - name: Read task history
+      ansible.builtin.command:
+        argv: [docker, service, ps, "{{ app_name }}", --format, !unsafe "table {{.Name}}\t{{.Image}}\t{{.Node}}\t{{.DesiredState}}\t{{.CurrentState}}"]
+      register: history_tasks
+      changed_when: false
+      failed_when: false
+
+    - name: History of {{ app_name }} in {{ env_name | upper }}
+      ansible.builtin.debug:
+        msg: "{{ 'DEPLOYMENTS (oldest first)\n' ~ (history_log.stdout if history_log.rc == 0 else 'none recorded')
+          ~ '\n\nTASKS\n' ~ (history_tasks.stdout if history_tasks.rc == 0 else 'service not running') }}"

@@ -1,0 +1,35 @@
+---
+env_name: dev
+
+# --- Access -----------------------------------------------------------------
+# Each environment has its own SSH key, so a DEV key can never reach PROD.
+ansible_user: ubuntu
+ansible_ssh_private_key_file: ~/.ssh/swarm-dev
+
+# AWS security group in front of the nodes; `make allow-ip ENV=dev` puts your
+# current public IP on ports 22/8080 (run it whenever your IP changes).
+aws_region: us-east-1
+aws_security_group_id: sg-056f91c09f5b7e865
+
+# OS accounts allowed to run docker on the nodes (docker group == root, so keep
+# this list short). Each entry: { name: alice, pubkey: "ssh-ed25519 AAAA..." }
+swarm_operators: []
+
+# --- Host hardening ---------------------------------------------------------
+firewall_enabled: true
+ssh_allowed_cidrs:
+  - 0.0.0.0/0
+
+# --- Swarm ------------------------------------------------------------------
+swarm_autolock: false
+apps_network: apps_net
+overlay_encrypted: false
+
+# --- Application defaults for this environment ------------------------------
+# Merged over roles/swarm_app/defaults (swarm_app_defaults) and under each
+# inventories/dev/apps/<app>.yml. DEV favours fast feedback.
+app_env_defaults:
+  update_config:
+    parallelism: 1
+    delay: 2s
+    monitor: 20s

@@ -1,0 +1,19 @@
+---
+# Load inventories/<env>/apps/*.yml (the spec) and *.env (plain environment
+# variables) into `app_catalog` and `app_env_files`. Runs on the controller.
+
+- name: Load application definitions
+  ansible.builtin.set_fact:
+    app_catalog: >-
+      {{ dict(_files | map('basename') | map('regex_replace', '\.yml$', '')
+              | zip(query('ansible.builtin.file', *_files) | map('from_yaml'))) }}
+    app_env_files: >-
+      {{ dict(_env_files | map('basename') | map('regex_replace', '\.env$', '')
+              | zip(query('ansible.builtin.file', *_env_files) | map('parse_dotenv'))) }}
+  vars:
+    _files: "{{ query('ansible.builtin.fileglob', swarm_app_definitions_dir ~ '/*.yml') | sort }}"
+    _env_files: "{{ query('ansible.builtin.fileglob', swarm_app_definitions_dir ~ '/*.env') | sort }}"
+
+- name: Show the applications defined for {{ env_name | upper }}
+  ansible.builtin.debug:
+    msg: "{{ app_catalog.keys() | sort | join(', ') if app_catalog else 'none in ' ~ swarm_app_definitions_dir }}"
