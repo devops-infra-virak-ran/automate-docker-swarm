@@ -12,6 +12,23 @@ More detail: [reference](docs/reference.md) · [architecture](docs/architecture.
 - The VMs must reach each other on ports 2377/tcp, 7946/tcp+udp, 4789/udp
   (plus ESP for UAT/PROD)
 
+### Windows
+
+Ansible does not run on Windows itself — use WSL2 and do everything in the Ubuntu terminal:
+
+```powershell
+wsl --install -d Ubuntu      # PowerShell as Administrator, then reboot
+```
+
+```bash
+sudo apt update && sudo apt install -y make python3-venv git unzip
+curl -sSo awscliv2.zip https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip && unzip -q awscliv2.zip && sudo ./aws/install   # only for make allow-ip
+git clone <repo-url> ~/docker-swarm-automation   # inside ~, NOT /mnt/c/... (permissions break there)
+cp /mnt/c/Users/<you>/Downloads/swarm-dev ~/.ssh/ && chmod 600 ~/.ssh/swarm-dev
+```
+
+Then follow the steps below from that folder.
+
 ## How to run
 
 ```bash
@@ -51,6 +68,7 @@ make rollback ENV=dev APP=web VERSION=1.27-alpine
 make rename   ENV=dev APP=web NEW_NAME=frontend
 make remove   ENV=dev APP=web
 make env-set  ENV=dev APP=web KEY=LOG_LEVEL VALUE=info
+make cluster-destroy ENV=dev CONFIRM=yes           # remove swarm + apps, keep VMs (rebuild: bootstrap + deploy)
 make help                                          # every command
 ```
 
@@ -64,3 +82,4 @@ make bootstrap ENV=lab
 make deploy ENV=lab
 make lab-down                # remove them
 ```
+# automate-docker-swarm
