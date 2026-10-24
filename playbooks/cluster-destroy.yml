@@ -1,0 +1,57 @@
+---
+# Tear the swarm down on every node so it can be rebuilt from scratch with
+# `make bootstrap` + `make deploy`. All services, configs, secrets and overlay
+# networks go with it. The VMs, Docker, SSH hardening and the firewall stay.
+# Workers leave first, then the managers, so no manager is left without quorum.
+#
+#   make cluster-destroy ENV=<env> CONFIRM=yes
+- name: Check the request
+  hosts: swarm_nodes
+  gather_facts: false
+  tasks:
+    - name: Require confirmation (any environment)
+      ansible.builtin.assert:
+        that: (confirm | default('') | string | lower) in ['yes', 'true']
+        fail_msg: >-
+          This removes the whole {{ env_name }} swarm and every app on it.
+          Re-run with CONFIRM=yes (Makefile) or -e confirm=yes.
+        quiet: true
+      run_once: true
+
+- name: Workers leave the swarm
+  hosts: workers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Leave
+      community.docker.docker_swarm:
+        state: absent
+        force: true
+
+- name: Managers leave the swarm
+  hosts: managers
+  become: true
+  gather_facts: false
+  serial: 1
+  # The bootstrap manager goes last; it is the one that holds the cluster state.
+  order: reverse_inventory
+  tasks:
+    - name: Leave
+      community.docker.docker_swarm:
+        state: absent
+        force: true
+
+- name: Confirm every node is out
+  hosts: swarm_nodes
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Read Docker host info
+      community.docker.docker_host_info:
+      register: destroy_host
+
+    - name: Check swarm state
+      ansible.builtin.assert:
+        that: destroy_host.host_info.Swarm.LocalNodeState == 'inactive'
+        fail_msg: "{{ inventory_hostname }} is still in a swarm ({{ destroy_host.host_info.Swarm.LocalNodeState }})"
+        success_msg: "{{ inventory_hostname }}: no swarm — rebuild with make bootstrap ENV={{ env_name }}"

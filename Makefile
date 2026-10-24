@@ -7,6 +7,11 @@
 SHELL        := /bin/bash
 .DEFAULT_GOAL := help
 
+# Ansible cannot run on native Windows (cmd, PowerShell, Git Bash) — only inside WSL2.
+ifeq ($(OS),Windows_NT)
+$(error Windows detected: run this from a WSL2 Ubuntu terminal instead — see "Windows" in README.md)
+endif
+
 ENV  ?= dev
 ENVS := dev uat prod
 ifeq ($(filter $(ENV),$(ENVS) lab),)
@@ -94,15 +99,15 @@ lint: ## Syntax-check every playbook against every environment (+ ansible-lint i
 test: lint ## Unit tests for the filter plugins + lint
 	python3 -m unittest discover -s tests -p 'test_*.py'
 
-allow-ip: ## Allow your current public IP on ports 22/8080 in the ENV security group [PORTS="22 8080"]
-	PORTS="$(or $(PORTS),22 8080)" scripts/allow-my-ip.sh $(ENV)
+allow-ip: ## Allow your current public IP on ports 22/8080 in the ENV security group [PORTS="22 8080"] [OPERATOR=name]
+	PORTS="$(or $(PORTS),22 8080)" OPERATOR="$(OPERATOR)" scripts/allow-my-ip.sh $(ENV)
 
 ping: ## Check SSH + Python on every node in ENV
 	$(check_vault)
 	$(ANSIBLE) -i $(INVENTORY) $(VAULT_ARGS) swarm_nodes -m ansible.builtin.ping
 
 ##@ Cluster
-.PHONY: bootstrap prepare cluster-init status nodes node-add node-remove node-drain node-activate
+.PHONY: bootstrap prepare cluster-init cluster-destroy status nodes node-add node-remove node-drain node-activate
 bootstrap: ## Prepare the VMs and create the swarm (prepare + cluster-init)
 	$(check_vault)
 	$(PLAY) playbooks/site.yml $(if $(SERIAL),-e serial=$(SERIAL),)
@@ -112,6 +117,9 @@ prepare: ## Packages, SSH hardening, firewall, Docker (SERIAL=1 on live clusters
 
 cluster-init: ## Initialise the swarm and join every inventory node
 	$(PLAY) playbooks/cluster-init.yml
+
+cluster-destroy: ## Remove the swarm and all apps (VMs and Docker stay): CONFIRM=yes
+	$(PLAY) playbooks/cluster-destroy.yml
 
 status: ## Cluster health: quorum, nodes, degraded services
 	$(PLAY) playbooks/cluster-status.yml
