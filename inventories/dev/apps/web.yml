@@ -6,7 +6,7 @@
 # rollback/remove — commit the change afterwards.
 state: present
 image: nginx
-version: "1.27-alpine"
+version: "1.28-alpine"
 replicas: 2
 
 publish:
